@@ -601,7 +601,6 @@ unwrapUnsafe (UnsafeName name) =
 enum : ( String, List String ) -> Type
 enum variants =
     variants
-        |> NonEmpty.sort
         |> NonEmpty.map UnsafeName
         |> Enum
 
