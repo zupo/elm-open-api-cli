@@ -1,7 +1,8 @@
-module Test.OpenApi.Generate exposing (enumQueryParamsUseNamedEnumToString, fuzzInputName, fuzzTitle, issue48, pathLevelParams, pr267, uuidArrayParam)
+module Test.OpenApi.Generate exposing (enumQueryParamsUseNamedEnumToString, fuzzInputName, fuzzTitle, issue48, pathLevelParams, pr267, responseVersionDeclarations, responseVersionElmPagesUnsupported, uuidArrayParam)
 
 import Ansi.Color
 import CliMonad
+import Common
 import Dict
 import Dict.Extra
 import Diff
@@ -14,6 +15,7 @@ import Fuzz
 import Json.Decode
 import Json.Encode
 import OpenApi
+import OpenApi.Common.Internal
 import OpenApi.Config
 import OpenApi.Generate
 import String.Extra
@@ -812,7 +814,11 @@ pathLevelParams =
 
 
                                                 getItems :
-                                                    { toMsg : Result (OpenApi.Common.Error e String) { count : Int } -> msg
+                                                    { toMsg :
+                                                        Result (OpenApi.Common.ResponseWithVersion (OpenApi.Common.Error e String)) (OpenApi.Common.ResponseWithVersion { count :
+                                                            Int
+                                                        })
+                                                        -> msg
                                                     , params : { orgId : String, status : Maybe String }
                                                     }
                                                     -> Cmd msg
@@ -856,6 +862,72 @@ pathLevelParams =
                                         )
 
 
+responseVersionDeclarations : Test
+responseVersionDeclarations =
+    Test.describe "response version declarations"
+        [ Test.test "are omitted when disabled" <|
+            \() ->
+                let
+                    commonFileString : String
+                    commonFileString =
+                        OpenApi.Common.Internal.declarations
+                            { effectTypes = [ OpenApi.Config.ElmHttpCmd ]
+                            , requiresBase64 = False
+                            , responseVersionCheck = Nothing
+                            }
+                            |> commonDeclarationsToString
+                in
+                Expect.all
+                    [ \_ -> Expect.equal False (String.contains "responseVersionFromError" commonFileString)
+                    , \_ -> expectContains "type alias ResponseVersion =" commonFileString
+                    , \_ -> expectContains "type alias ResponseWithVersion value =" commonFileString
+                    ]
+                    ()
+        , Test.test "are generated when enabled" <|
+            \() ->
+                let
+                    commonFileString : String
+                    commonFileString =
+                        OpenApi.Common.Internal.declarations
+                            { effectTypes = [ OpenApi.Config.ElmHttpCmd ]
+                            , requiresBase64 = False
+                            , responseVersionCheck = Just { headerName = "OpenAPI-Hash" }
+                            }
+                            |> commonDeclarationsToString
+                in
+                Expect.all
+                    [ \_ -> expectContains "type alias ResponseVersion =" commonFileString
+                    , \_ -> expectContains "responseVersionFromError :" commonFileString
+                    , \_ -> expectContains "\"OpenAPI-Hash\"" commonFileString
+                    , \_ -> expectContains "String.toLower key" commonFileString
+                    ]
+                    ()
+        ]
+
+
+responseVersionElmPagesUnsupported : Test
+responseVersionElmPagesUnsupported =
+    Test.test "response version extraction is rejected for elm-pages effect types" <|
+        \() ->
+            case
+                OpenApi.Generate.validateResponseVersionSupport
+                    (Just { headerName = "OpenAPI-Hash" })
+                    { namespace = [ "Output" ]
+                    , generateTodos = False
+                    , effectTypes = [ OpenApi.Config.DillonkearnsElmPagesTask ]
+                    , server = OpenApi.Config.Default
+                    , formats = OpenApi.Config.defaultFormats
+                    , warnOnMissingEnums = True
+                    , keepGoing = False
+                    }
+            of
+                Err message ->
+                    expectContains "not supported for dillonkearns/elm-pages" message.message
+
+                Ok _ ->
+                    Expect.fail "Expected generation to fail for elm-pages effect types"
+
+
 yamlToJsonValueDecoder : Yaml.Decode.Decoder Json.Encode.Value
 yamlToJsonValueDecoder =
     Yaml.Decode.oneOf
@@ -884,6 +956,20 @@ fileToString file =
                     (Elm.comment ("## " ++ group) :: List.map (\( _, { declaration } ) -> declaration) decls)
             )
         |> Elm.file file.moduleName
+        |> .contents
+
+
+commonDeclarationsToString : List { declaration : Elm.Declaration, group : String } -> String
+commonDeclarationsToString declarations =
+    declarations
+        |> Dict.Extra.groupBy .group
+        |> Dict.toList
+        |> List.map
+            (\( group, decls ) ->
+                Elm.group
+                    (Elm.comment ("## " ++ group) :: List.map .declaration decls)
+            )
+        |> Elm.file Common.commonModuleName
         |> .contents
 
 

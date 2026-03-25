@@ -9,6 +9,7 @@ node_modules
 
 # Other
 .direnv
+.devenv
 dist
 generated
 .elm-pages

@@ -121,16 +121,20 @@ subscriptions _ =
     Sub.none
 
 
+type alias ApiResult err value =
+    Result (OpenApi.Common.ResponseWithVersion err) (OpenApi.Common.ResponseWithVersion value)
+
+
 type Msg
-    = ConduitResponse (Result (OpenApi.Common.Error RealworldConduitApi.Types.Responses.GenericError String) RealworldConduitApi.Types.Responses.SingleArticleResponse)
-    | AmadeusResponse (Result (OpenApi.Common.Error AirlineCodeLookupApi.Types.Responses.Getairlines_Error String) AirlineCodeLookupApi.Types.Responses.Airlines)
+    = ConduitResponse (ApiResult (OpenApi.Common.Error RealworldConduitApi.Types.Responses.GenericError String) RealworldConduitApi.Types.Responses.SingleArticleResponse)
+    | AmadeusResponse (ApiResult (OpenApi.Common.Error AirlineCodeLookupApi.Types.Responses.Getairlines_Error String) AirlineCodeLookupApi.Types.Responses.Airlines)
       -- | BimResponse (Result (OpenApi.Common.Error BimcloudApi20232AlphaRelease.BlobStoreService10BeginBatchUpload_Error Bytes.Bytes) Bytes.Bytes)
-    | GithubResponse (Result (OpenApi.Common.Error () String) GithubV3RestApi.Types.Root)
-    | DbFahrplanResponse (Result (OpenApi.Common.Error Never String) DbFahrplanApi.Types.LocationResponse)
-    | MarioPartyStatsResponse (Result (OpenApi.Common.Error Never String) (List MarioPartyStats.Types.Boards))
-    | TrustmarkTradeCheckResponse (Result (OpenApi.Common.Error Never String) Trustmark.TradeCheck.Types.TradeCheckResponse)
-    | PatreonResponse (Result (OpenApi.Common.Error PatreonApi.Types.Responses.GetCampaign_Error String) PatreonApi.Types.Responses.CampaignResponse)
-    | TrustmarkResponse (Result (OpenApi.Common.Error Never String) (List String))
+    | GithubResponse (ApiResult (OpenApi.Common.Error () String) GithubV3RestApi.Types.Root)
+    | DbFahrplanResponse (ApiResult (OpenApi.Common.Error Never String) DbFahrplanApi.Types.LocationResponse)
+    | MarioPartyStatsResponse (ApiResult (OpenApi.Common.Error Never String) (List MarioPartyStats.Types.Boards))
+    | TrustmarkTradeCheckResponse (ApiResult (OpenApi.Common.Error Never String) Trustmark.TradeCheck.Types.TradeCheckResponse)
+    | PatreonResponse (ApiResult (OpenApi.Common.Error PatreonApi.Types.Responses.GetCampaign_Error String) PatreonApi.Types.Responses.CampaignResponse)
+    | TrustmarkResponse (ApiResult (OpenApi.Common.Error Never String) (List String))
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )

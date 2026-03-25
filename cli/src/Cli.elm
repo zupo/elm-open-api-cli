@@ -21,6 +21,7 @@ import FatalError exposing (FatalError)
 import Json.Decode
 import Json.Encode
 import Json.Value
+import List.Extra
 import OpenApi
 import OpenApi.Common.Internal
 import OpenApi.Config
@@ -40,6 +41,7 @@ type alias CliOptions =
     { entryFilePath : OpenApi.Config.Path
     , outputDirectory : String
     , outputModuleName : Maybe String
+    , responseVersionHeader : Maybe String
     , effectTypes : List OpenApi.Config.EffectType
     , server : OpenApi.Config.Server
     , autoConvertSwagger : OpenApi.Config.AutoConvertSwagger
@@ -73,6 +75,17 @@ program =
                         |> Cli.Option.withDescription "The Elm module name. Defaults to `OAS info.title`."
                     )
                 |> Cli.OptionsParser.with
+                    (Cli.Option.optionalKeywordArg "response-version-header"
+                        |> Cli.Option.withDescription
+                            ([ "Expose a response version header through `OpenApi.Common.responseVersionFromError`."
+                             , "Pass the exact response header name you want to expose."
+                             , "Your application can forward that value to JavaScript or a port."
+                             , "Comparison or reload behavior is handled by your app."
+                             ]
+                                |> formatOptionDescription
+                            )
+                    )
+                |> Cli.OptionsParser.with
                     (Cli.Option.optionalKeywordArg "effect-types"
                         |> Cli.Option.validateMap effectTypesValidation
                         |> Cli.Option.withDescription
@@ -96,6 +109,9 @@ program =
                              , " - taskrisky: as above, but using Http.riskyTask"
                              , "              cannot be used for dillonkearns/elm-pages"
                              , " - taskrecord: the input to Http.task"
+                             , ""
+                             , "Response version extraction is not supported for"
+                             , "dillonkearns/elm-pages effect types."
                              ]
                                 |> formatOptionDescription
                             )
@@ -337,6 +353,19 @@ serverValidation server =
                         Ok <| OpenApi.Config.Single input
 
 
+responseVersionHeaderValidation : Maybe String -> Maybe OpenApi.Config.ResponseVersionCheck
+responseVersionHeaderValidation maybeHeader =
+    case maybeHeader of
+        Nothing ->
+            Nothing
+
+        Just "" ->
+            Nothing
+
+        Just headerName ->
+            Just { headerName = headerName }
+
+
 run : Pages.Script.Script
 run =
     Pages.Script.withCliOptions program
@@ -380,6 +409,8 @@ parseCliOptions cliOptions =
                 |> OpenApi.Config.withOverrides cliOptions.overrides
                 |> maybe OpenApi.Config.withWriteMergedTo cliOptions.writeMergedTo
                 |> maybe OpenApi.Config.withOutputModuleName (Maybe.map (String.split ".") cliOptions.outputModuleName)
+                |> maybe OpenApi.Config.withResponseVersionCheck
+                    (responseVersionHeaderValidation cliOptions.responseVersionHeader)
                 |> iif (not (List.isEmpty cliOptions.effectTypes)) (OpenApi.Config.withEffectTypes cliOptions.effectTypes)
     in
     OpenApi.Config.init cliOptions.outputDirectory
@@ -517,7 +548,7 @@ withConfig config =
         |> withStep "Generate Elm modules"
             (\( (), apiSpecs, allFormats ) ->
                 OpenApi.Config.toGenerationConfig (List.concat allFormats) config apiSpecs
-                    |> generateFilesFromOpenApiSpecs
+                    |> generateFilesFromOpenApiSpecs (OpenApi.Config.inputs config)
             )
         |> (if OpenApi.Config.noElmFormat config then
                 identity
@@ -1060,7 +1091,8 @@ width =
 
 
 generateFilesFromOpenApiSpecs :
-    List ( OpenApi.Config.Generate, OpenApi.OpenApi )
+    List OpenApi.Config.Input
+    -> List ( OpenApi.Config.Generate, OpenApi.OpenApi )
     ->
         BackendTask.BackendTask
             FatalError.FatalError
@@ -1069,11 +1101,43 @@ generateFilesFromOpenApiSpecs :
               , requiredPackages : FastSet.Set String
               }
             )
-generateFilesFromOpenApiSpecs configs =
+generateFilesFromOpenApiSpecs inputConfigs configs =
+    let
+        responseVersionChecks : List OpenApi.Config.ResponseVersionCheck
+        responseVersionChecks =
+            inputConfigs
+                |> List.filterMap OpenApi.Config.responseVersionCheck
+                |> List.Extra.uniqueBy .headerName
+    in
+    case responseVersionChecks of
+        [] ->
+            generateFilesFromOpenApiSpecsWithResponseVersionCheck Nothing configs
+
+        [ responseVersionCheck ] ->
+            generateFilesFromOpenApiSpecsWithResponseVersionCheck (Just responseVersionCheck) configs
+
+        _ ->
+            BackendTask.fail
+                (FatalError.fromString "All generated inputs must use the same response-version-header configuration.")
+
+
+generateFilesFromOpenApiSpecsWithResponseVersionCheck :
+    Maybe OpenApi.Config.ResponseVersionCheck
+    -> List ( OpenApi.Config.Generate, OpenApi.OpenApi )
+    ->
+        BackendTask.BackendTask
+            FatalError.FatalError
+            ( List Elm.File
+            , { warnings : List OpenApi.Generate.Message
+              , requiredPackages : FastSet.Set String
+              }
+            )
+generateFilesFromOpenApiSpecsWithResponseVersionCheck responseVersionCheck configs =
     configs
         |> BackendTask.Extra.combineMap
             (\( config, apiSpec ) ->
-                OpenApi.Generate.files config apiSpec
+                OpenApi.Generate.validateResponseVersionSupport responseVersionCheck config
+                    |> Result.andThen (\_ -> OpenApi.Generate.files config apiSpec)
                     |> Result.mapError
                         (\err ->
                             err
@@ -1143,6 +1207,7 @@ generateFilesFromOpenApiSpecs configs =
                                         OpenApi.Common.Internal.declarations
                                             { effectTypes = allEffectTypes
                                             , requiresBase64 = List.any (\{ requiredPackages } -> FastSet.member Common.base64PackageName requiredPackages) result
+                                            , responseVersionCheck = responseVersionCheck
                                             }
                                 in
                                 fileFromGroups moduleName (commonDeclarations ++ deduplicatedDeclarations) :: acc
