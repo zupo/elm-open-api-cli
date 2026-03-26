@@ -1,4 +1,4 @@
-module NonEmpty exposing (NonEmpty, fromList, map, sort, sortBy, toList)
+module NonEmpty exposing (NonEmpty, fromList, map, sortBy, toList)
 
 
 type alias NonEmpty a =
@@ -23,17 +23,6 @@ toList ( h, t ) =
 map : (a -> b) -> NonEmpty a -> NonEmpty b
 map f ( h, t ) =
     ( f h, List.map f t )
-
-
-sort : NonEmpty comparable -> NonEmpty comparable
-sort ( h, t ) =
-    case List.sort (h :: t) of
-        [] ->
-            -- This is impossible, the result is irrelevant
-            ( h, t )
-
-        nh :: nt ->
-            ( nh, nt )
 
 
 sortBy : (a -> comparable) -> ( a, List a ) -> ( a, List a )

@@ -12,6 +12,15 @@ To allow developers to generate an Elm module(s) from an OpenAPI Spec. This is p
 
 ## [Using the CLI](https://github.com/wolfadex/elm-open-api-cli/blob/main/docs/USAGE.md)
 
+## Building the Binary
+
+To build the CLI bundle into `dist/elm-open-api.js`, use the Nix dev shell and the Bun dist script:
+
+```sh
+nix develop
+bun run dist
+```
+
 ## [Contributing to Development](https://github.com/wolfadex/elm-open-api-cli/blob/main/docs/CONTRIBUTING.md)
 
 ## Thank you

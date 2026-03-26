@@ -13,3 +13,4 @@ dist
 generated
 .elm-pages
 *.cpuprofile
+result

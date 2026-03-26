@@ -642,7 +642,14 @@ enumName : List Common.UnsafeName -> CliMonad (Maybe Common.UnsafeName)
 enumName variants =
     CliMonad
         (\input cache ->
-            case FastDict.get (List.map Common.unwrapUnsafe variants) input.enums of
+            case
+                FastDict.get
+                    (variants
+                        |> List.map Common.unwrapUnsafe
+                        |> List.sort
+                    )
+                    input.enums
+            of
                 Just { name } ->
                     Ok ( Just name, emptyOutput, cache )
 

@@ -9,13 +9,14 @@
         "dev": "cd cli && elm-pages run src/Cli.elm",
         "docs": "elm make --docs=docs.json",
         "build": "cd cli && elm-pages bundle-script src/Cli.elm --output ../dist/elm-open-api.js --debug",
+        "dist": "cd cli && elm-pages bundle-script src/Cli.elm --output ../dist/elm-open-api.js --optimize 1",
         "review": "elm-review",
         "review:watch": "elm-review --watch --fix",
         "format": "elm-format src tests --validate",
         "test": "elm-test",
         "test:gen": "cd cli && elm-pages run src/TestGenScript.elm",
         "test:watch": "elm-test --watch",
-        "pub": "npm run build && npm publish"
+        "pub": "npm run dist && npm publish"
     },
     "author": "Wolfgang Schuster",
     "license": "MIT",
@@ -33,6 +34,6 @@
         "vite": "^6.0.3"
     },
     "volta": {
-        "node": "20.11.0"
+        "node": "20.19.5"
     }
 }
