@@ -1,8 +1,8 @@
-module OpenApi.Generate exposing (ContentSchema, Message, Path, Mime, files)
+module OpenApi.Generate exposing (ContentSchema, Message, Path, Mime, files, validateResponseVersionSupport)
 
 {-|
 
-@docs ContentSchema, Message, Path, Mime, files
+@docs ContentSchema, Message, Path, Mime, files, validateResponseVersionSupport
 
 -}
 
@@ -61,12 +61,14 @@ import SchemaUtils
 import String.Extra
 
 
-{-| -}
+{-| A MIME type string such as `"application/json"` or `"text/plain"`.
+-}
 type alias Mime =
     String
 
 
-{-| -}
+{-| A generation warning or error with path context and pretty-printed details.
+-}
 type alias Message =
     { message : String
     , path : Path
@@ -74,12 +76,14 @@ type alias Message =
     }
 
 
-{-| -}
+{-| A breadcrumb path describing where a warning or error occurred.
+-}
 type alias Path =
     List String
 
 
-{-| -}
+{-| The content shape chosen for a request or response body during generation.
+-}
 type ContentSchema
     = EmptyContent
     | JsonContent Common.Type
@@ -104,7 +108,8 @@ type alias PerPackage a =
     }
 
 
-{-| -}
+{-| Generate Elm modules for a parsed OpenAPI document.
+-}
 files :
     OpenApi.Config.Generate
     -> OpenApi.OpenApi
@@ -176,6 +181,29 @@ files { namespace, generateTodos, effectTypes, server, formats, warnOnMissingEnu
                         , requiredPackages = requiredPackages
                         }
                     )
+
+
+{-| Reject response-version extraction for effect types that cannot expose response metadata.
+-}
+validateResponseVersionSupport :
+    Maybe OpenApi.Config.ResponseVersionCheck
+    -> OpenApi.Config.Generate
+    -> Result Message ()
+validateResponseVersionSupport maybeResponseVersionCheck { namespace, effectTypes } =
+    case maybeResponseVersionCheck of
+        Just _ ->
+            if List.any (\effectType -> OpenApi.Config.effectTypeToPackage effectType == Common.DillonkearnsElmPages) effectTypes then
+                Err
+                    { message = "Response version extraction is not supported for dillonkearns/elm-pages effect types."
+                    , path = [ String.join "." namespace, "OpenApi.Common.responseVersionFromError" ]
+                    , details = Pretty.string "This feature relies on response metadata that elm-pages does not expose through the generated request helpers."
+                    }
+
+            else
+                Ok ()
+
+        Nothing ->
+            Ok ()
 
 
 extractEnums :
@@ -1820,8 +1848,16 @@ toConfigParamAnnotation options =
                 toMsgCore =
                     Elm.Annotation.function
                         [ Elm.Annotation.result
-                            (OpenApi.Common.Internal.annotation_.error options.errorTypeAnnotation options.errorBodyAnnotation)
-                            options.successAnnotation
+                            (Elm.Annotation.namedWith
+                                [ "OpenApi", "Common" ]
+                                "ResponseWithVersion"
+                                [ OpenApi.Common.Internal.annotation_.error options.errorTypeAnnotation options.errorBodyAnnotation ]
+                            )
+                            (Elm.Annotation.namedWith
+                                [ "OpenApi", "Common" ]
+                                "ResponseWithVersion"
+                                [ options.successAnnotation ]
+                            )
                         ]
                         (Elm.Annotation.var "msg")
 
@@ -1829,8 +1865,16 @@ toConfigParamAnnotation options =
                 toMsgLamderaProgramTest =
                     Elm.Annotation.function
                         [ Elm.Annotation.result
-                            (OpenApi.Common.Internal.annotation_.error options.errorTypeAnnotation options.errorBodyAnnotation)
-                            options.successAnnotation
+                            (Elm.Annotation.namedWith
+                                [ "OpenApi", "Common" ]
+                                "ResponseWithVersion"
+                                [ OpenApi.Common.Internal.annotation_.error options.errorTypeAnnotation options.errorBodyAnnotation ]
+                            )
+                            (Elm.Annotation.namedWith
+                                [ "OpenApi", "Common" ]
+                                "ResponseWithVersion"
+                                [ options.successAnnotation ]
+                            )
                         ]
                         (Elm.Annotation.var "msg")
 

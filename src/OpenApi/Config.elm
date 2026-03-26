@@ -1,10 +1,10 @@
 module OpenApi.Config exposing
-    ( Config, EffectType(..), effectTypeToPackage, Format, Input, Path(..), Server(..)
+    ( Config, EffectType(..), ResponseVersionCheck, effectTypeToPackage, Format, Input, Path(..), Server(..)
     , init, inputFrom, pathFromString
     , withAutoConvertSwagger, AutoConvertSwagger(..), withEffectTypes, withFormat, withFormats, withGenerateTodos, withInput, withSwaggerConversionCommand, withSwaggerConversionUrl, withNoElmFormat, withKeepGoing
-    , withOutputModuleName, withOverrides, withServer, withWriteMergedTo, withWarnOnMissingEnums
+    , withOutputModuleName, withOverrides, withResponseVersionCheck, withServer, withWriteMergedTo, withWarnOnMissingEnums
     , autoConvertSwagger, inputs, outputDirectory, swaggerConversionCommand, swaggerConversionUrl, noElmFormat, keepGoing
-    , oasPath, overrides, writeMergedTo
+    , oasPath, overrides, responseVersionCheck, writeMergedTo
     , toGenerationConfig, Generate, pathToString
     , defaultFormats
     )
@@ -14,14 +14,14 @@ module OpenApi.Config exposing
 
 # Types
 
-@docs Config, EffectType, effectTypeToPackage, Format, Input, Path, Server
+@docs Config, EffectType, ResponseVersionCheck, effectTypeToPackage, Format, Input, Path, Server
 
 
 # Creation
 
 @docs init, inputFrom, pathFromString
 @docs withAutoConvertSwagger, AutoConvertSwagger, withEffectTypes, withFormat, withFormats, withGenerateTodos, withInput, withSwaggerConversionCommand, withSwaggerConversionUrl, withNoElmFormat, withKeepGoing
-@docs withOutputModuleName, withOverrides, withServer, withWriteMergedTo, withWarnOnMissingEnums
+@docs withOutputModuleName, withOverrides, withResponseVersionCheck, withServer, withWriteMergedTo, withWarnOnMissingEnums
 
 
 # Config properties
@@ -31,7 +31,7 @@ module OpenApi.Config exposing
 
 # Input properties
 
-@docs oasPath, overrides, writeMergedTo
+@docs oasPath, overrides, responseVersionCheck, writeMergedTo
 
 
 # Output
@@ -107,6 +107,7 @@ type Input
         , server : Server
         , overrides : List Path
         , writeMergedTo : Maybe String
+        , responseVersionCheck : Maybe ResponseVersionCheck
         , effectTypes : List EffectType
         , warnOnMissingEnums : Bool
         }
@@ -129,6 +130,13 @@ type EffectType
     | LamderaProgramTestTask -- `Effect.Http.task` from lamdera/program-test
     | LamderaProgramTestTaskRecord -- The input to `Effect.Http.task` from lamdera/program-test
     | LamderaProgramTestTaskRisky -- `Effect.Http.riskyTask` from lamdera/program-test
+
+
+{-| Configuration for exposing a response version header to the generated SDK.
+-}
+type alias ResponseVersionCheck =
+    { headerName : String
+    }
 
 
 {-| Gets the package that an `EffectType` is defined in.
@@ -221,7 +229,8 @@ pathFromString path =
             File path
 
 
-{-| -}
+{-| Convert a `Path` back to its string form.
+-}
 pathToString : Path -> String
 pathToString pathType =
     case pathType of
@@ -257,7 +266,12 @@ init initialOutputDirectory =
         |> Config
 
 
-{-| -}
+{-| Create a default `Input` from a path.
+
+The generated module name will be derived from the OpenAPI title unless you
+override it later.
+
+-}
 inputFrom : Path -> Input
 inputFrom path =
     { oasPath = path
@@ -265,6 +279,7 @@ inputFrom path =
     , server = Default
     , overrides = []
     , writeMergedTo = Nothing
+    , responseVersionCheck = Nothing
     , effectTypes = [ ElmHttpCmd, ElmHttpTask ]
     , warnOnMissingEnums = False
     }
@@ -483,73 +498,92 @@ passwordFormat =
 -------------
 
 
-{-| -}
+{-| Set the effect types to generate for this input.
+-}
 withEffectTypes : List EffectType -> Input -> Input
 withEffectTypes effectTypes (Input input) =
     Input { input | effectTypes = effectTypes }
 
 
-{-| -}
+{-| Override the generated module namespace for this input.
+-}
 withOutputModuleName : List String -> Input -> Input
 withOutputModuleName moduleName (Input input) =
     Input { input | outputModuleName = Just moduleName }
 
 
-{-| -}
+{-| Attach override files that should be merged into the input spec before generation.
+-}
 withOverrides : List Path -> Input -> Input
 withOverrides newOverrides (Input input) =
     Input { input | overrides = newOverrides }
 
 
-{-| -}
+{-| Configure whether unsupported branches should generate `Debug.todo`.
+-}
 withGenerateTodos : Bool -> Config -> Config
 withGenerateTodos generateTodos (Config config) =
     Config { config | generateTodos = generateTodos }
 
 
-{-| -}
+{-| Choose how Swagger inputs should be converted to OpenAPI.
+-}
 withAutoConvertSwagger : AutoConvertSwagger -> Config -> Config
 withAutoConvertSwagger newAutoConvertSwagger (Config config) =
     Config { config | autoConvertSwagger = newAutoConvertSwagger }
 
 
-{-| -}
+{-| Set the URL used for remote Swagger-to-OpenAPI conversion.
+-}
 withSwaggerConversionUrl : String -> Config -> Config
 withSwaggerConversionUrl newSwaggerConversionUrl (Config config) =
     Config { config | swaggerConversionUrl = newSwaggerConversionUrl }
 
 
-{-| -}
+{-| Use a custom command instead of the default remote Swagger conversion service.
+-}
 withSwaggerConversionCommand : { command : String, args : List String } -> Config -> Config
 withSwaggerConversionCommand newSwaggerConversionCommand (Config config) =
     Config { config | swaggerConversionCommand = Just newSwaggerConversionCommand }
 
 
-{-| -}
+{-| Override the server configuration for generated requests from this input.
+-}
 withServer : Server -> Input -> Input
 withServer newServer (Input input) =
     Input { input | server = newServer }
 
 
-{-| -}
+{-| Write the merged OpenAPI document for this input to the given path.
+-}
 withWriteMergedTo : String -> Input -> Input
 withWriteMergedTo newWriteMergedTo (Input input) =
     Input { input | writeMergedTo = Just newWriteMergedTo }
 
 
-{-| -}
+{-| Expose the given response version header in generated error helpers for this input.
+-}
+withResponseVersionCheck : ResponseVersionCheck -> Input -> Input
+withResponseVersionCheck newResponseVersionCheck (Input input) =
+    Input { input | responseVersionCheck = Just newResponseVersionCheck }
+
+
+{-| Enable or disable warnings for enums that cannot be represented precisely.
+-}
 withWarnOnMissingEnums : Bool -> Input -> Input
 withWarnOnMissingEnums newWarnOnMissingEnums (Input input) =
     Input { input | warnOnMissingEnums = newWarnOnMissingEnums }
 
 
-{-| -}
+{-| Add one custom format to the global configuration.
+-}
 withFormat : Format -> Config -> Config
 withFormat newFormat (Config config) =
     Config { config | staticFormats = newFormat :: config.staticFormats }
 
 
-{-| -}
+{-| Add custom formats derived from the formats already present in the OpenAPI inputs.
+-}
 withFormats :
     (List { format : String, basicType : Common.BasicType } -> List Format)
     -> Config
@@ -558,18 +592,22 @@ withFormats newFormat (Config config) =
     Config { config | dynamicFormats = \input -> newFormat input ++ config.dynamicFormats input }
 
 
-{-| -}
+{-| Add one input specification to the generator configuration.
+-}
 withInput : Input -> Config -> Config
 withInput input (Config config) =
     Config { config | inputs = input :: config.inputs }
 
 
-{-| -}
+{-| Skip running `elm-format` on generated files when set to `True`.
+-}
 withNoElmFormat : Bool -> Config -> Config
 withNoElmFormat newNoElmFormat (Config config) =
     Config { config | noElmFormat = newNoElmFormat }
 
 
+{-| Continue generation after non-fatal issues by collecting warnings where possible.
+-}
 withKeepGoing : Bool -> Config -> Config
 withKeepGoing newKeepGoing (Config config) =
     Config { config | keepGoing = newKeepGoing }
@@ -581,61 +619,78 @@ withKeepGoing newKeepGoing (Config config) =
 -------------
 
 
-{-| -}
+{-| The configured Swagger conversion URL.
+-}
 swaggerConversionUrl : Config -> String
 swaggerConversionUrl (Config config) =
     config.swaggerConversionUrl
 
 
-{-| -}
+{-| The custom Swagger conversion command, if one has been configured.
+-}
 swaggerConversionCommand : Config -> Maybe { command : String, args : List String }
 swaggerConversionCommand (Config config) =
     config.swaggerConversionCommand
 
 
-{-| -}
+{-| How Swagger conversion should be handled.
+-}
 autoConvertSwagger : Config -> AutoConvertSwagger
 autoConvertSwagger (Config config) =
     config.autoConvertSwagger
 
 
-{-| -}
+{-| The output directory for generated files.
+-}
 outputDirectory : Config -> String
 outputDirectory (Config config) =
     config.outputDirectory
 
 
-{-| -}
+{-| The configured input specs in insertion order.
+-}
 inputs : Config -> List Input
 inputs (Config config) =
     List.reverse config.inputs
 
 
-{-| -}
+{-| Whether generated files should skip `elm-format`.
+-}
 noElmFormat : Config -> Bool
 noElmFormat (Config config) =
     config.noElmFormat
 
 
-{-| -}
+{-| Whether generation should continue after recoverable problems.
+-}
 keepGoing : Config -> Bool
 keepGoing (Config config) =
     config.keepGoing
 
 
-{-| -}
+{-| The source path or URL for this input spec.
+-}
 oasPath : Input -> Path
 oasPath (Input input) =
     input.oasPath
 
 
-{-| -}
+{-| The optional path where the merged spec should be written.
+-}
 writeMergedTo : Input -> Maybe String
 writeMergedTo (Input input) =
     input.writeMergedTo
 
 
-{-| -}
+{-| The configured response version header extraction, if enabled.
+-}
+responseVersionCheck : Input -> Maybe ResponseVersionCheck
+responseVersionCheck (Input input) =
+    input.responseVersionCheck
+
+
+{-| Override files to merge into the input spec before generation.
+-}
 overrides : Input -> List Path
 overrides (Input input) =
     input.overrides
@@ -647,7 +702,8 @@ overrides (Input input) =
 ------------
 
 
-{-| -}
+{-| The normalized generation settings derived from a `Config` and parsed inputs.
+-}
 type alias Generate =
     { namespace : List String
     , generateTodos : Bool
@@ -659,7 +715,8 @@ type alias Generate =
     }
 
 
-{-| -}
+{-| Convert the full configuration and parsed OpenAPI inputs into per-input generation settings.
+-}
 toGenerationConfig :
     List { format : String, basicType : Common.BasicType }
     -> Config

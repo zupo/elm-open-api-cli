@@ -8,6 +8,7 @@ import Elm.Case
 import Elm.Declare
 import Elm.Declare.Extra
 import Elm.Extra
+import Elm.Op
 import Gen.Base64
 import Gen.Bytes
 import Gen.Bytes.Decode
@@ -46,8 +47,14 @@ errorAnnotation t =
     annotation_.error (Elm.Annotation.var "err") t
 
 
-declarations : { a | requiresBase64 : Bool, effectTypes : List OpenApi.Config.EffectType } -> List { declaration : Elm.Declaration, group : String }
-declarations { requiresBase64, effectTypes } =
+declarations :
+    { a
+        | requiresBase64 : Bool
+        , effectTypes : List OpenApi.Config.EffectType
+        , responseVersionCheck : Maybe OpenApi.Config.ResponseVersionCheck
+    }
+    -> List { declaration : Elm.Declaration, group : String }
+declarations { requiresBase64, effectTypes, responseVersionCheck } =
     let
         requiresElmHttp : Bool
         requiresElmHttp =
@@ -80,6 +87,7 @@ declarations { requiresBase64, effectTypes } =
         common : List { declaration : Elm.Declaration, group : String }
         common =
             group "Common" True commonSubmodule
+                ++ responseVersionDeclarations responseVersionCheck
 
         group :
             String
@@ -102,6 +110,189 @@ declarations { requiresBase64, effectTypes } =
     elmHttp ++ elmHttpBase64 ++ lamderaProgramTest ++ lamderaProgramTestBase64 ++ common
 
 
+responseVersionDeclarations :
+    Maybe OpenApi.Config.ResponseVersionCheck
+    -> List { declaration : Elm.Declaration, group : String }
+responseVersionDeclarations maybeResponseVersionCheck =
+    [ { declaration = responseVersionAlias
+      , group = "Types"
+      }
+    , { declaration = responseWithVersionAlias
+      , group = "Types"
+      }
+    , { declaration = responseVersionFromMetadata maybeResponseVersionCheck
+      , group = "Common"
+      }
+    ]
+        ++ (case maybeResponseVersionCheck of
+                Nothing ->
+                    []
+
+                Just responseVersionCheck ->
+                    [ { declaration = responseVersionFromError responseVersionCheck
+                      , group = "Common"
+                      }
+                    ]
+           )
+
+
+responseVersionAlias : Elm.Declaration
+responseVersionAlias =
+    Elm.alias "ResponseVersion"
+        (Elm.Annotation.record
+            [ ( "headerName", Elm.Annotation.string )
+            , ( "responseVersion", Elm.Annotation.string )
+            ]
+        )
+        |> Elm.withDocumentation "The response version header extracted from an API error."
+        |> Elm.expose
+
+
+responseWithVersionAlias : Elm.Declaration
+responseWithVersionAlias =
+    Elm.alias "ResponseWithVersion"
+        (Elm.Annotation.record
+            [ ( "value", Elm.Annotation.var "value" )
+            , ( "responseVersion"
+              , Elm.Annotation.maybe
+                    (Elm.Annotation.namedWith Common.commonModuleName "ResponseVersion" [])
+              )
+            ]
+        )
+        |> Elm.withDocumentation "A value together with any observed response version header."
+        |> Elm.expose
+
+
+responseVersionFromError : OpenApi.Config.ResponseVersionCheck -> Elm.Declaration
+responseVersionFromError { headerName } =
+    let
+        responseVersionAnnotation : Elm.Annotation.Annotation
+        responseVersionAnnotation =
+            Elm.Annotation.namedWith Common.commonModuleName "ResponseVersion" []
+
+        fromHeaders : Elm.Expression -> Elm.Expression
+        fromHeaders headers =
+            Gen.Dict.call_.foldl
+                (Elm.fn3
+                    (Elm.Arg.varWith "key" Elm.Annotation.string)
+                    (Elm.Arg.varWith "value" Elm.Annotation.string)
+                    (Elm.Arg.varWith "found" (Elm.Annotation.maybe responseVersionAnnotation))
+                    (\key value found ->
+                        Elm.Case.maybe found
+                            { just = ( "match", Gen.Maybe.make_.just )
+                            , nothing =
+                                Elm.ifThen
+                                    (Elm.Op.equal
+                                        (Gen.String.call_.toLower key)
+                                        (Gen.String.call_.toLower (Elm.string headerName))
+                                    )
+                                    (Gen.Maybe.make_.just
+                                        (Elm.record
+                                            [ ( "headerName", Elm.string headerName )
+                                            , ( "responseVersion", value )
+                                            ]
+                                        )
+                                    )
+                                    Gen.Maybe.make_.nothing
+                            }
+                    )
+                )
+                Gen.Maybe.make_.nothing
+                headers
+
+        fromMetadata : Elm.Expression -> Elm.Expression
+        fromMetadata metadata =
+            fromHeaders (Elm.get "headers" metadata)
+    in
+    Elm.fn
+        (Elm.Arg.varWith
+            "err"
+            (annotation_.error (Elm.Annotation.var "err") (Elm.Annotation.var "body"))
+        )
+        (\err ->
+            error.case_ err
+                { badUrl = \_ -> Gen.Maybe.make_.nothing
+                , timeout = Gen.Maybe.make_.nothing
+                , networkError = Gen.Maybe.make_.nothing
+                , knownBadStatus = \_ _ -> Gen.Maybe.make_.nothing
+                , unknownBadStatus = \metadata _ -> fromMetadata metadata
+                , badErrorBody = \metadata _ -> fromMetadata metadata
+                , badBody = \metadata _ -> fromMetadata metadata
+                }
+                |> Elm.withType (Elm.Annotation.maybe responseVersionAnnotation)
+        )
+        |> Elm.withType
+            (Elm.Annotation.function
+                [ annotation_.error (Elm.Annotation.var "err") (Elm.Annotation.var "body") ]
+                (Elm.Annotation.maybe responseVersionAnnotation)
+            )
+        |> Elm.declaration "responseVersionFromError"
+        |> Elm.withDocumentation
+            ("Extract the configured response version header from an API error.\n\n"
+                ++ "This is useful when your application wants to forward the server's\n"
+                ++ "response version to JavaScript, a port, or shared app state.\n"
+                ++ "Any comparison or reload behavior is handled by your application."
+            )
+        |> Elm.expose
+
+
+responseVersionFromMetadata : Maybe OpenApi.Config.ResponseVersionCheck -> Elm.Declaration
+responseVersionFromMetadata maybeResponseVersionCheck =
+    let
+        responseVersionAnnotation : Elm.Annotation.Annotation
+        responseVersionAnnotation =
+            Elm.Annotation.namedWith Common.commonModuleName "ResponseVersion" []
+
+        fromHeaders : Elm.Expression -> Elm.Expression
+        fromHeaders headers =
+            case maybeResponseVersionCheck of
+                Nothing ->
+                    Gen.Maybe.make_.nothing
+
+                Just { headerName } ->
+                    Gen.Dict.call_.foldl
+                        (Elm.fn3
+                            (Elm.Arg.varWith "key" Elm.Annotation.string)
+                            (Elm.Arg.varWith "value" Elm.Annotation.string)
+                            (Elm.Arg.varWith "found" (Elm.Annotation.maybe responseVersionAnnotation))
+                            (\key value found ->
+                                Elm.Case.maybe found
+                                    { just = ( "match", Gen.Maybe.make_.just )
+                                    , nothing =
+                                        Elm.ifThen
+                                            (Elm.Op.equal
+                                                (Gen.String.call_.toLower key)
+                                                (Gen.String.call_.toLower (Elm.string headerName))
+                                            )
+                                            (Gen.Maybe.make_.just
+                                                (Elm.record
+                                                    [ ( "headerName", Elm.string headerName )
+                                                    , ( "responseVersion", value )
+                                                    ]
+                                                )
+                                            )
+                                            Gen.Maybe.make_.nothing
+                                    }
+                            )
+                        )
+                        Gen.Maybe.make_.nothing
+                        headers
+    in
+    Elm.fn
+        (Elm.Arg.varWith "metadata" Gen.Http.annotation_.metadata)
+        (\metadata ->
+            fromHeaders (Elm.get "headers" metadata)
+                |> Elm.withType (Elm.Annotation.maybe responseVersionAnnotation)
+        )
+        |> Elm.withType
+            (Elm.Annotation.function
+                [ Gen.Http.annotation_.metadata ]
+                (Elm.Annotation.maybe responseVersionAnnotation)
+            )
+        |> Elm.declaration "responseVersionFromMetadata"
+        |> Elm.withDocumentation "Extract the configured response version header from response metadata."
+
+
 type alias ElmHttpSubmodule =
     { expectJsonCustom : Elm.Expression -> Elm.Expression -> Elm.Expression -> Elm.Expression
     , jsonResolverCustom : Elm.Expression -> Elm.Expression -> Elm.Expression
@@ -122,6 +313,8 @@ elmHttpSubmodule =
         |> Elm.Declare.with expectBytesCustom
         |> Elm.Declare.with bytesResolverCustom
         |> Elm.Declare.withUnexposed responseToResult
+        |> Elm.Declare.withUnexposed responseVersionFromResponse
+        |> Elm.Declare.withUnexposed wrapResultWithResponseVersion
 
 
 type alias ElmHttpBase64Submodule =
@@ -142,15 +335,18 @@ expectJsonCustom =
     outerExpectJsonCustom "expectJsonCustom"
         (\errorDecoders successDecoder toMsg ->
             let
-                toResult : Elm.Expression -> Elm.Expression
-                toResult response =
-                    responseToResultWrapped
-                        errorDecoders
-                        identity
-                        (innerExpectJsonCustom successDecoder)
-                        response
+                toPayload : Elm.Expression -> Elm.Expression
+                toPayload response =
+                    wrapResultWithResponseVersion.call
+                        (Elm.apply (Elm.val "responseVersionFromResponse") [ response ])
+                        (responseToResultWrapped
+                            errorDecoders
+                            identity
+                            (innerExpectJsonCustom successDecoder)
+                            response
+                        )
             in
-            Gen.Http.expectStringResponse toMsg toResult
+            Gen.Http.expectStringResponse toMsg toPayload
                 |> Elm.withType (Gen.Http.annotation_.expect (Elm.Annotation.var "msg"))
         )
 
@@ -178,15 +374,18 @@ expectStringCustom =
         "expectStringCustom"
         (\errorDecoders toMsg ->
             let
-                toResult : Elm.Expression -> Elm.Expression
-                toResult response =
-                    responseToResultWrapped
-                        errorDecoders
-                        identity
-                        (always Gen.Result.make_.ok)
-                        response
+                toPayload : Elm.Expression -> Elm.Expression
+                toPayload response =
+                    wrapResultWithResponseVersion.call
+                        (Elm.apply (Elm.val "responseVersionFromResponse") [ response ])
+                        (responseToResultWrapped
+                            errorDecoders
+                            identity
+                            (always Gen.Result.make_.ok)
+                            response
+                        )
             in
-            Gen.Http.expectStringResponse toMsg toResult
+            Gen.Http.expectStringResponse toMsg toPayload
                 |> Elm.withType (Gen.Http.annotation_.expect (Elm.Annotation.var "msg"))
         )
 
@@ -213,15 +412,18 @@ expectBytesCustom =
     outerExpectBytesCustom "expectBytesCustom"
         (\errorDecoders toMsg ->
             let
-                toResult : Elm.Expression -> Elm.Expression
-                toResult response =
-                    responseToResultWrapped
-                        errorDecoders
-                        bytesToString
-                        (always Gen.Result.make_.ok)
-                        response
+                toPayload : Elm.Expression -> Elm.Expression
+                toPayload response =
+                    wrapResultWithResponseVersion.call
+                        (Elm.apply (Elm.val "responseVersionFromResponse") [ response ])
+                        (responseToResultWrapped
+                            errorDecoders
+                            bytesToString
+                            (always Gen.Result.make_.ok)
+                            response
+                        )
             in
-            Gen.Http.expectBytesResponse toMsg toResult
+            Gen.Http.expectBytesResponse toMsg toPayload
                 |> Elm.withType (Gen.Http.annotation_.expect (Elm.Annotation.var "msg"))
         )
 
@@ -249,19 +451,22 @@ expectBase64Custom =
         "expectBase64Custom"
         (\errorDecoders toMsg ->
             let
-                toResult : Elm.Expression -> Elm.Expression
-                toResult response =
-                    responseToResultWrapped
-                        errorDecoders
-                        identity
-                        (\metadata body ->
-                            body
-                                |> Gen.Base64.call_.toBytes
-                                |> Gen.Result.fromMaybe (error.make_.badBody metadata body)
+                toPayload : Elm.Expression -> Elm.Expression
+                toPayload response =
+                    wrapResultWithResponseVersion.call
+                        (Elm.apply (Elm.val "responseVersionFromResponse") [ response ])
+                        (responseToResultWrapped
+                            errorDecoders
+                            identity
+                            (\metadata body ->
+                                body
+                                    |> Gen.Base64.call_.toBytes
+                                    |> Gen.Result.fromMaybe (error.make_.badBody metadata body)
+                            )
+                            response
                         )
-                        response
             in
-            Gen.Http.expectStringResponse toMsg toResult
+            Gen.Http.expectStringResponse toMsg toPayload
                 |> Elm.withType (Gen.Http.annotation_.expect (Elm.Annotation.var "msg"))
         )
 
@@ -299,6 +504,70 @@ responseToResultWrapped errorDecoders bodyToString onSuccess response =
         (Elm.Extra.functionReduced "body" bodyToString)
         (Elm.fn2 (Elm.Arg.var "metadata") (Elm.Arg.var "body") onSuccess)
         response
+
+
+responseVersionFromResponse : Elm.Declare.Function (Elm.Expression -> Elm.Expression)
+responseVersionFromResponse =
+    Elm.Declare.fn "responseVersionFromResponse"
+        (Elm.Arg.varWith "response" (Gen.Http.annotation_.response (Elm.Annotation.var "body")))
+        (\response ->
+            Gen.Http.caseOf_.response response
+                { badUrl_ = \_ -> Gen.Maybe.make_.nothing
+                , timeout_ = Gen.Maybe.make_.nothing
+                , networkError_ = Gen.Maybe.make_.nothing
+                , badStatus_ = \metadata _ -> Elm.apply (Elm.val "responseVersionFromMetadata") [ metadata ]
+                , goodStatus_ = \metadata _ -> Elm.apply (Elm.val "responseVersionFromMetadata") [ metadata ]
+                }
+                |> Elm.withType
+                    (Elm.Annotation.maybe
+                        (Elm.Annotation.namedWith Common.commonModuleName "ResponseVersion" [])
+                    )
+        )
+
+
+wrapResultWithResponseVersion : Elm.Declare.Function (Elm.Expression -> Elm.Expression -> Elm.Expression)
+wrapResultWithResponseVersion =
+    Elm.Declare.fn2 "wrapResultWithResponseVersion"
+        (Elm.Arg.varWith
+            "responseVersion"
+            (Elm.Annotation.maybe
+                (Elm.Annotation.namedWith Common.commonModuleName "ResponseVersion" [])
+            )
+        )
+        (Elm.Arg.varWith
+            "result"
+            (Elm.Annotation.result (Elm.Annotation.var "err") (Elm.Annotation.var "value"))
+        )
+        (\responseVersion result ->
+            Elm.apply
+                Gen.Result.values_.mapError
+                [ Elm.fn
+                    (Elm.Arg.varWith "err" (Elm.Annotation.var "err"))
+                    (\err ->
+                        Elm.record
+                            [ ( "value", err )
+                            , ( "responseVersion", responseVersion )
+                            ]
+                    )
+                , Elm.apply
+                    Gen.Result.values_.map
+                    [ Elm.fn
+                        (Elm.Arg.varWith "value" (Elm.Annotation.var "value"))
+                        (\value ->
+                            Elm.record
+                                [ ( "value", value )
+                                , ( "responseVersion", responseVersion )
+                                ]
+                        )
+                    , result
+                    ]
+                ]
+                |> Elm.withType
+                    (Elm.Annotation.result
+                        (Elm.Annotation.namedWith Common.commonModuleName "ResponseWithVersion" [ Elm.Annotation.var "err" ])
+                        (Elm.Annotation.namedWith Common.commonModuleName "ResponseWithVersion" [ Elm.Annotation.var "value" ])
+                    )
+        )
 
 
 responseToResult : Elm.Declare.Function (Elm.Expression -> Elm.Expression -> Elm.Expression -> Elm.Expression -> Elm.Expression)
@@ -396,6 +665,7 @@ lamderaProgramTestSubmodule =
         |> Elm.Declare.with expectBytesCustomEffect
         |> Elm.Declare.with bytesResolverCustomEffect
         |> Elm.Declare.withUnexposed responseToResultEffect
+        |> Elm.Declare.withUnexposed wrapResultWithResponseVersion
 
 
 type alias LamderaProgramTestBase64Submodule =
@@ -416,15 +686,26 @@ expectJsonCustomEffect =
     outerExpectJsonCustom "expectJsonCustomEffect"
         (\errorDecoders successDecoder toMsg ->
             let
-                toResult : Elm.Expression -> Elm.Expression
-                toResult response =
-                    responseToResultEffectWrapped
-                        errorDecoders
-                        identity
-                        (innerExpectJsonCustom successDecoder)
-                        response
+                toPayload : Elm.Expression -> Elm.Expression
+                toPayload response =
+                    wrapResultWithResponseVersion.call
+                        (Elm.Case.maybe
+                            (Elm.get "metadata" response)
+                            { just =
+                                ( "metadata"
+                                , \metadata -> Elm.apply (Elm.val "responseVersionFromMetadata") [ metadata ]
+                                )
+                            , nothing = Gen.Maybe.make_.nothing
+                            }
+                        )
+                        (responseToResultEffectWrapped
+                            errorDecoders
+                            identity
+                            (innerExpectJsonCustom successDecoder)
+                            response
+                        )
             in
-            Gen.Effect.Http.expectStringResponse toMsg toResult
+            Gen.Effect.Http.expectStringResponse toMsg toPayload
                 |> Elm.withType (Gen.Effect.Http.annotation_.expect (Elm.Annotation.var "msg"))
         )
 
@@ -447,15 +728,26 @@ expectBytesCustomEffect =
     outerExpectBytesCustom "expectBytesCustomEffect"
         (\errorDecoders toMsg ->
             let
-                toResult : Elm.Expression -> Elm.Expression
-                toResult response =
-                    responseToResultEffectWrapped
-                        errorDecoders
-                        bytesToString
-                        (always Gen.Result.make_.ok)
-                        response
+                toPayload : Elm.Expression -> Elm.Expression
+                toPayload response =
+                    wrapResultWithResponseVersion.call
+                        (Elm.Case.maybe
+                            (Elm.get "metadata" response)
+                            { just =
+                                ( "metadata"
+                                , \metadata -> Elm.apply (Elm.val "responseVersionFromMetadata") [ metadata ]
+                                )
+                            , nothing = Gen.Maybe.make_.nothing
+                            }
+                        )
+                        (responseToResultEffectWrapped
+                            errorDecoders
+                            bytesToString
+                            (always Gen.Result.make_.ok)
+                            response
+                        )
             in
-            Gen.Effect.Http.expectBytesResponse toMsg toResult
+            Gen.Effect.Http.expectBytesResponse toMsg toPayload
                 |> Elm.withType (Gen.Effect.Http.annotation_.expect (Elm.Annotation.var "msg"))
         )
 
@@ -483,15 +775,26 @@ expectStringCustomEffect =
         "expectStringCustomEffect"
         (\errorDecoders toMsg ->
             let
-                toResult : Elm.Expression -> Elm.Expression
-                toResult response =
-                    responseToResultEffectWrapped
-                        errorDecoders
-                        identity
-                        (always Gen.Result.make_.ok)
-                        response
+                toPayload : Elm.Expression -> Elm.Expression
+                toPayload response =
+                    wrapResultWithResponseVersion.call
+                        (Elm.Case.maybe
+                            (Elm.get "metadata" response)
+                            { just =
+                                ( "metadata"
+                                , \metadata -> Elm.apply (Elm.val "responseVersionFromMetadata") [ metadata ]
+                                )
+                            , nothing = Gen.Maybe.make_.nothing
+                            }
+                        )
+                        (responseToResultEffectWrapped
+                            errorDecoders
+                            identity
+                            (always Gen.Result.make_.ok)
+                            response
+                        )
             in
-            Gen.Effect.Http.expectStringResponse toMsg toResult
+            Gen.Effect.Http.expectStringResponse toMsg toPayload
                 |> Elm.withType (Gen.Effect.Http.annotation_.expect (Elm.Annotation.var "msg"))
         )
 
@@ -519,19 +822,30 @@ expectBase64CustomEffect =
         "expectBase64CustomEffect"
         (\errorDecoders toMsg ->
             let
-                toResult : Elm.Expression -> Elm.Expression
-                toResult response =
-                    responseToResultEffectWrapped
-                        errorDecoders
-                        identity
-                        (\metadata body ->
-                            body
-                                |> Gen.Base64.call_.toBytes
-                                |> Gen.Result.fromMaybe (error.make_.badBody metadata body)
+                toPayload : Elm.Expression -> Elm.Expression
+                toPayload response =
+                    wrapResultWithResponseVersion.call
+                        (Elm.Case.maybe
+                            (Elm.get "metadata" response)
+                            { just =
+                                ( "metadata"
+                                , \metadata -> Elm.apply (Elm.val "responseVersionFromMetadata") [ metadata ]
+                                )
+                            , nothing = Gen.Maybe.make_.nothing
+                            }
                         )
-                        response
+                        (responseToResultEffectWrapped
+                            errorDecoders
+                            identity
+                            (\metadata body ->
+                                body
+                                    |> Gen.Base64.call_.toBytes
+                                    |> Gen.Result.fromMaybe (error.make_.badBody metadata body)
+                            )
+                            response
+                        )
             in
-            Gen.Effect.Http.expectStringResponse toMsg toResult
+            Gen.Effect.Http.expectStringResponse toMsg toPayload
                 |> Elm.withType (Gen.Effect.Http.annotation_.expect (Elm.Annotation.var "msg"))
         )
 
@@ -876,12 +1190,24 @@ outerExpectJsonCustom name f =
         )
         (Elm.Arg.varWith "toMsg"
             (Elm.Annotation.function
-                [ Elm.Annotation.result (errorAnnotation Elm.Annotation.string) (Elm.Annotation.var "success")
+                [ Elm.Annotation.result
+                    (Elm.Annotation.namedWith Common.commonModuleName
+                        "ResponseWithVersion"
+                        [ errorAnnotation Elm.Annotation.string ]
+                    )
+                    (Elm.Annotation.namedWith Common.commonModuleName
+                        "ResponseWithVersion"
+                        [ Elm.Annotation.var "success" ]
+                    )
                 ]
                 (Elm.Annotation.var "msg")
             )
         )
-        (\errorDecoders successDecoders toMsg -> f errorDecoders successDecoders (\result -> Elm.apply toMsg [ result ]))
+        (\errorDecoders successDecoders toMsg ->
+            f errorDecoders
+                successDecoders
+                (\payload -> Elm.apply toMsg [ payload ])
+        )
 
 
 outerExpectStringCustom :
@@ -899,11 +1225,23 @@ outerExpectStringCustom resultType name f =
         )
         (Elm.Arg.varWith "toMsg"
             (Elm.Annotation.function
-                [ Elm.Annotation.result (errorAnnotation Elm.Annotation.string) resultType ]
+                [ Elm.Annotation.result
+                    (Elm.Annotation.namedWith Common.commonModuleName
+                        "ResponseWithVersion"
+                        [ errorAnnotation Elm.Annotation.string ]
+                    )
+                    (Elm.Annotation.namedWith Common.commonModuleName
+                        "ResponseWithVersion"
+                        [ resultType ]
+                    )
+                ]
                 (Elm.Annotation.var "msg")
             )
         )
-        (\errorDecoders toMsg -> f errorDecoders (\result -> Elm.apply toMsg [ result ]))
+        (\errorDecoders toMsg ->
+            f errorDecoders
+                (\payload -> Elm.apply toMsg [ payload ])
+        )
 
 
 outerExpectBytesCustom :
@@ -921,13 +1259,22 @@ outerExpectBytesCustom name f =
         (Elm.Arg.varWith "toMsg"
             (Elm.Annotation.function
                 [ Elm.Annotation.result
-                    (errorAnnotation Gen.Bytes.annotation_.bytes)
-                    Gen.Bytes.annotation_.bytes
+                    (Elm.Annotation.namedWith Common.commonModuleName
+                        "ResponseWithVersion"
+                        [ errorAnnotation Gen.Bytes.annotation_.bytes ]
+                    )
+                    (Elm.Annotation.namedWith Common.commonModuleName
+                        "ResponseWithVersion"
+                        [ Gen.Bytes.annotation_.bytes ]
+                    )
                 ]
                 (Elm.Annotation.var "msg")
             )
         )
-        (\errorDecoders toMsg -> f errorDecoders (\result -> Elm.apply toMsg [ result ]))
+        (\errorDecoders toMsg ->
+            f errorDecoders
+                (\payload -> Elm.apply toMsg [ payload ])
+        )
 
 
 innerExpectJsonCustom :
