@@ -1,4 +1,4 @@
-module Test.OpenApi.Generate exposing (fuzzInputName, fuzzTitle, issue48, pathLevelParams, pr267, uuidArrayParam)
+module Test.OpenApi.Generate exposing (enumQueryParamsUseNamedEnumToString, fuzzInputName, fuzzTitle, issue48, pathLevelParams, pr267, uuidArrayParam)
 
 import Ansi.Color
 import CliMonad
@@ -587,6 +587,121 @@ uuidArrayParam =
                                         )
 
 
+enumQueryParamsUseNamedEnumToString : Test
+enumQueryParamsUseNamedEnumToString =
+    Test.test "Named enum query params use enum-to-string helpers even when enum order is not sorted" <|
+        \() ->
+            let
+                oasString : String
+                oasString =
+                    String.Multiline.here """
+                        openapi: "3.1.0"
+                        info:
+                          title: "Enum Query Params Test"
+                          version: "1.0.0"
+                        components:
+                          schemas:
+                            TaskStatus:
+                              type: string
+                              enum:
+                                - pending
+                                - active
+                        paths:
+                          /items:
+                            get:
+                              operationId: getItems
+                              parameters:
+                                - in: query
+                                  name: status
+                                  required: false
+                                  schema:
+                                    $ref: "#/components/schemas/TaskStatus"
+                                - in: query
+                                  name: statuses
+                                  required: false
+                                  schema:
+                                    type: array
+                                    items:
+                                      $ref: "#/components/schemas/TaskStatus"
+                              responses:
+                                "200":
+                                  description: OK
+                                  content:
+                                    application/json:
+                                      schema:
+                                        type: object
+                                        properties:
+                                          count:
+                                            type: integer
+                                        required:
+                                          - count
+                    """
+            in
+            case
+                oasString
+                    |> Yaml.Decode.fromString yamlToJsonValueDecoder
+                    |> Result.mapError Debug.toString
+                    |> Result.andThen
+                        (\json ->
+                            json
+                                |> Json.Decode.decodeValue OpenApi.decode
+                                |> Result.mapError Debug.toString
+                        )
+            of
+                Err e ->
+                    Expect.fail e
+
+                Ok oas ->
+                    let
+                        genFiles :
+                            Result
+                                CliMonad.Message
+                                { modules :
+                                    List
+                                        { moduleName : List String
+                                        , declarations : FastDict.Dict String { group : String, declaration : Elm.Declaration }
+                                        }
+                                , warnings : List CliMonad.Message
+                                , requiredPackages : FastSet.Set String
+                                }
+                        genFiles =
+                            OpenApi.Generate.files
+                                { namespace = [ "Output" ]
+                                , generateTodos = False
+                                , effectTypes = [ OpenApi.Config.ElmHttpCmd ]
+                                , server = OpenApi.Config.Default
+                                , formats = OpenApi.Config.defaultFormats
+                                , warnOnMissingEnums = True
+                                , keepGoing = False
+                                }
+                                oas
+                    in
+                    case genFiles of
+                        Err e ->
+                            Expect.fail ("Error in generation: " ++ Debug.toString e)
+
+                        Ok { modules } ->
+                            case List.filter (\file -> file.moduleName == [ "Output", "Api" ]) modules of
+                                [ apiFile ] ->
+                                    let
+                                        apiFileContents : String
+                                        apiFileContents =
+                                            fileToString apiFile
+                                    in
+                                    Expect.all
+                                        [ \_ -> expectContains "Maybe Output.Types.TaskStatus" apiFileContents
+                                        , \_ -> expectContains "Maybe (List Output.Types.TaskStatus)" apiFileContents
+                                        , \_ -> expectOccurrenceCount 2 "Output.Types.taskStatusToString" apiFileContents
+                                        ]
+                                        ()
+
+                                _ ->
+                                    Expect.fail
+                                        ("Expected to generate an Output.Api module but found "
+                                            ++ moduleNames modules
+                                        )
+
+
 pathLevelParams : Test
 pathLevelParams =
     Test.test "Path-level parameters are merged into operations" <|
@@ -804,3 +919,27 @@ expectContains needle haystack =
 
     else
         Expect.fail ("Expected output to contain: " ++ needle)
+
+
+expectOccurrenceCount : Int -> String -> String -> Expect.Expectation
+expectOccurrenceCount expected needle haystack =
+    let
+        actual : Int
+        actual =
+            haystack
+                |> String.split needle
+                |> List.length
+                |> (\parts -> parts - 1)
+    in
+    if actual == expected then
+        Expect.pass
+
+    else
+        Expect.fail
+            ("Expected output to contain "
+                ++ String.fromInt expected
+                ++ " occurrences of "
+                ++ needle
+                ++ " but found "
+                ++ String.fromInt actual
+            )
